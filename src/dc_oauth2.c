@@ -27,13 +27,16 @@ static int is_expired(dc_context_t* context)
 		"oauth2_timestamp_expires", 0);
 
 	if (expire_timestamp<=0) {
+		dc_log_info(context, 0, "===== OAuth: no expire time =====");
 		return 0; // timestamp does never expire
 	}
 
 	if (expire_timestamp>time(NULL)) {
+		dc_log_info(context, 0, "===== OAuth: still valid =====");
 		return 0; // expire timestamp is in the future and not yet expired
 	}
 
+	dc_log_info(context, 0, "===== OAuth: expired =====");
 	return 1; // expired
 }
 
