@@ -217,11 +217,23 @@ cleanup:
 }
 
 
-char* dc_get_oauth2_addr(dc_context_t* context, const char* addr)
+static char* get_oauth2_addr(dc_context_t* context, char* access_token)
 {
-	// TODO:
-	//
-	// calling https://www.googleapis.com/oauth2/v1/userinfo?alt=json&access_token=TOKEN
+	char*       addr_out = NULL;
+	char*       userinfo_url = NULL;
+	char*       json = NULL;
+	jsmn_parser parser;
+	jsmntok_t   tok[128]; // we do not expect nor read more tokens
+	int         tok_cnt = 0;
+
+	if (context==NULL || context->magic!=DC_CONTEXT_MAGIC
+	 || access_token==NULL || access_token[0]==0) {
+		goto cleanup;
+	}
+
+	userinfo_url = dc_mprintf(
+		"https://www.googleapis.com/oauth2/v1/userinfo?alt=json&access_token=%s",
+		access_token);
 	// returns sth. as
 	// {
 	//   "id": "100000000831024152393",
@@ -229,10 +241,55 @@ char* dc_get_oauth2_addr(dc_context_t* context, const char* addr)
 	//   "verified_email": true,
 	//   "picture": "https://lh4.googleusercontent.com/-Gj5jh_9R0BY/AAAAAAAAAAI/AAAAAAAAAAA/IAjtjfjtjNA/photo.jpg"
 	// }
-	// the returned email-addr must be used
-	// instead of the one initially entered by the user as he may have
-	// selected a different account to use in the browser.
-	//
-	// if the address cannot be find out this way, return NULL and the caller will use the given one.
-	return NULL;
+
+	json = (char*)context->cb(context, DC_EVENT_HTTP_GET, (uintptr_t)userinfo_url, 0);
+	if (json==NULL) {
+		dc_log_warning(context, 0, "Error getting userinfo.");
+		goto cleanup;
+	}
+
+	jsmn_init(&parser);
+	tok_cnt = jsmn_parse(&parser, json, strlen(json), tok, sizeof(tok)/sizeof(tok[0]));
+	if (tok_cnt<2 || tok[0].type!=JSMN_OBJECT) {
+		dc_log_warning(context, 0, "Failed to parse userinfo.");
+		goto cleanup;
+	}
+
+	for (int i = 1; i < tok_cnt; i++) {
+		if (addr_out==NULL && jsoneq(json, &tok[i], "email")==0) {
+			addr_out = jsondup(json, &tok[i+1]);
+		}
+	}
+
+	if (addr_out==NULL) {
+		dc_log_warning(context, 0, "E-mail missing in userinfo.");
+	}
+
+cleanup:
+	free(userinfo_url);
+	free(json);
+	return addr_out;
+}
+
+
+char* dc_get_oauth2_addr(dc_context_t* context, const char* code)
+{
+	char* access_token = NULL;
+	char* addr_out = NULL;
+
+	if (context==NULL || context->magic!=DC_CONTEXT_MAGIC) {
+		goto cleanup;
+	}
+
+	access_token = dc_get_oauth2_access_token(context, code, 0);
+	addr_out = get_oauth2_addr(context, access_token);
+	if (addr_out==NULL) {
+		free(access_token);
+		access_token = dc_get_oauth2_access_token(context, code, DC_REGENERATE);
+		addr_out = get_oauth2_addr(context, access_token);
+	}
+
+cleanup:
+	free(access_token);
+	return addr_out;
 }

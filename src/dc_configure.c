@@ -743,7 +743,7 @@ void dc_job_do_DC_JOB_CONFIGURE_IMAP(dc_context_t* context, dc_job_t* job)
 		// the used oauth2 addr may differ, check this.
 		// if dc_get_oauth2_addr() is not available in the oauth2 implementation,
 		// just use the given one.
-		char* oauth2_addr = dc_get_oauth2_addr(context, param->addr);
+		char* oauth2_addr = dc_get_oauth2_addr(context, param->mail_pw);
 		if (oauth2_addr) {
 			free(param->addr);
 			param->addr = oauth2_addr;
