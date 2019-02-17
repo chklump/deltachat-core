@@ -3,6 +3,9 @@
 #include "dc_jsmn.h"
 
 
+// TODO: refactor code so that it works with non-google oauth2 (outlook?, ??)
+
+
 static int jsoneq(const char *json, jsmntok_t *tok, const char *s) {
 	// from the jsmn parser example
 	if (tok->type == JSMN_STRING && (int) strlen(s) == tok->end - tok->start &&
@@ -27,16 +30,13 @@ static int is_expired(dc_context_t* context)
 		"oauth2_timestamp_expires", 0);
 
 	if (expire_timestamp<=0) {
-		dc_log_info(context, 0, "===== OAuth: no expire time =====");
 		return 0; // timestamp does never expire
 	}
 
 	if (expire_timestamp>time(NULL)) {
-		dc_log_info(context, 0, "===== OAuth: still valid =====");
 		return 0; // expire timestamp is in the future and not yet expired
 	}
 
-	dc_log_info(context, 0, "===== OAuth: expired =====");
 	return 1; // expired
 }
 
@@ -120,7 +120,7 @@ char* dc_get_oauth2_access_token(dc_context_t* context, const char* code, int fl
 	refresh_token = dc_sqlite3_get_config(context->sql, "oauth2_refresh_token", NULL);
 	if (refresh_token==NULL)
 	{
-		dc_log_info(context, 0, "===== OAuth: get code =====");
+		dc_log_info(context, 0, "Generate OAuth2 refresh_token and access_token...");
 		token_url = dc_mprintf("https://accounts.google.com/o/oauth2/token"
 			"?client_id=%s"
 			"&client_secret=%s"
@@ -131,7 +131,7 @@ char* dc_get_oauth2_access_token(dc_context_t* context, const char* code, int fl
 	}
 	else
 	{
-		dc_log_info(context, 0, "===== OAuth: regen =====");
+		dc_log_info(context, 0, "Regenerate OAuth2 access_token by refresh_token...");
 		token_url = dc_mprintf("https://accounts.google.com/o/oauth2/token"
 			"?client_id=%s"
 			"&client_secret=%s"
@@ -156,10 +156,10 @@ char* dc_get_oauth2_access_token(dc_context_t* context, const char* code, int fl
 	}
 
 	for (int i = 1; i < tok_cnt; i++) {
-		if (jsoneq(json, &tok[i], "access_token")==0) {
+		if (access_token==NULL && jsoneq(json, &tok[i], "access_token")==0) {
 			access_token = jsondup(json, &tok[i+1]);
 		}
-		else if (jsoneq(json, &tok[i], "refresh_token")==0) {
+		else if (refresh_token==NULL && jsoneq(json, &tok[i], "refresh_token")==0) {
 			refresh_token = jsondup(json, &tok[i+1]);
 		}
 		else if (jsoneq(json, &tok[i], "expires_in")==0) {
@@ -175,10 +175,10 @@ char* dc_get_oauth2_access_token(dc_context_t* context, const char* code, int fl
 				free(expires_in_str);
 			}
 		}
-		else if (jsoneq(json, &tok[i], "error")==0) {
+		else if (error==NULL && jsoneq(json, &tok[i], "error")==0) {
 			error = jsondup(json, &tok[i+1]);
 		}
-		else if (jsoneq(json, &tok[i], "error_description")==0) {
+		else if (error_description==NULL && jsoneq(json, &tok[i], "error_description")==0) {
 			error_description = jsondup(json, &tok[i+1]);
 		}
 	}
@@ -190,22 +190,21 @@ char* dc_get_oauth2_access_token(dc_context_t* context, const char* code, int fl
 		// continue, errors do not imply everything went wrong
 	}
 
+	// update refresh_token if given, typically on the first round, but we update it later as well.
+	if (refresh_token && refresh_token[0]) {
+		dc_sqlite3_set_config(context->sql, "oauth2_refresh_token", refresh_token);
+	}
+
+	// after that, save the access token.
+	// if it's unset, we may get it in the next round as we have the refresh_token now.
 	if (access_token==NULL || access_token[0]==0) {
 		dc_log_warning(context, 0, "Failed to find OAuth2 access token");
 		goto cleanup;
 	}
 
 	dc_sqlite3_set_config(context->sql, "oauth2_access_token", access_token);
-
 	dc_sqlite3_set_config_int64(context->sql, "oauth2_timestamp_expires",
 		expires_in? time(NULL)+expires_in-5/*refresh a bet before*/ : 0);
-
-	// update refresh_token if given,
-	// typically this is on the first round with `grant_type=authorization_code`
-	// but we update it later, too.
-	if (refresh_token && refresh_token[0]) {
-		dc_sqlite3_set_config(context->sql, "oauth2_refresh_token", refresh_token);
-	}
 
 cleanup:
 	if (locked) { pthread_mutex_unlock(&context->oauth2_critical); }
